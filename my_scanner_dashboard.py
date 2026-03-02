@@ -235,3 +235,4 @@ st.caption("Red = Bearish | Blue accents = Brand | Mini charts + accurate order-
 
 time.sleep(refresh_rate)
 st.rerun()
+
