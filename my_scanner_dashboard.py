@@ -92,27 +92,42 @@ def detect_structure(df, length, is_internal=False):
     phase = "Waiting"
     poi = None
     choche = False
-    trend_bias = leg_series.cumsum()  # Approximate trend
+    trend_bias = leg_series.cumsum()  # Approximate trend (cumulative legs)
 
-    if new_pivot.iloc[-1]:
-        if pivot_low.iloc[-1]:
+    # Extract scalar values once (safest way to avoid Series ambiguity)
+    new_pivot_last = new_pivot.iloc[-1].item() if not new_pivot.empty else False
+    pivot_low_last = pivot_low.iloc[-1].item() if not pivot_low.empty else False
+    pivot_high_last = pivot_high.iloc[-1].item() if not pivot_high.empty else False
+    trend_bias_last = trend_bias.iloc[-1].item() if not trend_bias.empty else 0
+
+    if new_pivot_last:
+        if pivot_low_last:
             bias = "Bullish"
             phase = "Pullback"
-            poi = df['Open'].iloc[-2].item() if df['Close'].iloc[-2] < df['Open'].iloc[-2] else df['Low'].iloc[-2].item()
-            if trend_bias.iloc[-1] < 0:
-                choche = True
-        elif pivot_high.iloc[-1]:
+            # POI = body/open of candle before break (order block style)
+            if len(df) >= 2:
+                prev_close = df['Close'].iloc[-2].item()
+                prev_open = df['Open'].iloc[-2].item()
+                poi = prev_open if prev_close < prev_open else df['Low'].iloc[-2].item()
+            if trend_bias_last < 0:
+                choche = True  # CHoCH if against prior trend
+        elif pivot_high_last:
             bias = "Bearish"
             phase = "Pullback"
-            poi = df['Open'].iloc[-2].item() if df['Close'].iloc[-2] > df['Open'].iloc[-2] else df['High'].iloc[-2].item()
-            if trend_bias.iloc[-1] > 0:
+            if len(df) >= 2:
+                prev_close = df['Close'].iloc[-2].item()
+                prev_open = df['Open'].iloc[-2].item()
+                poi = prev_open if prev_close > prev_open else df['High'].iloc[-2].item()
+            if trend_bias_last > 0:
                 choche = True
 
-    # Volume spike for confirmation
-    volume_spike = df['Volume'].iloc[-1].item() > df['Volume'].rolling(5).mean().iloc[-1].item() * 1.5
-    if not volume_spike:
-        bias = "No Bias"
+    # Volume spike confirmation (optional but adds accuracy)
+    if len(df) >= 1:
+        volume_spike = df['Volume'].iloc[-1].item() > df['Volume'].rolling(5).mean().iloc[-1].item() * 1.5
+        if not volume_spike:
+            bias = "No Bias"  # Invalidate weak signals
 
+    # Previous BOS (store last detected bias)
     previous_bos = [bias] if bias != "No Bias" else []
 
     return bias, phase, poi, choche, previous_bos
