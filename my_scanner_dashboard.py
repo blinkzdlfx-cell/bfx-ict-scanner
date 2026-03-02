@@ -21,9 +21,8 @@ st.title("BFX ICT Scanner Dashboard 🚀")
 st.markdown("**Premium Forex ICT Scanner** — Accurate BOS/CHoCH • Internal/Swing Structures • Order Blocks • Filtered FVG/Sweeps • Telegram Alerts")
 
 # ====================== YOUR SETTINGS ======================
-TELEGRAM_TOKEN = "8032718412:AAGFEeeDUFateTZrn7bYzGrACQ2qJWdIOaQ"   # ← your token
-TELEGRAM_CHAT_ID = "6311692829"                         # ← replace with your real chat ID
-
+TELEGRAM_TOKEN = "8032718412:AAGFEeeDUFateTZrn7bYzGrACQ2qJWdIOaQ"
+TELEGRAM_CHAT_ID = "6311692829"
 
 # Forex pairs only (15 majors/minors + gold)
 symbols = [
@@ -36,16 +35,14 @@ symbols = [
 st.sidebar.header("⚙️ Modifiable Settings")
 refresh_rate = st.sidebar.slider("Refresh every (seconds)", 30, 600, 180)
 poi_threshold_pct = st.sidebar.slider("POI reach threshold (%)", 0.05, 0.8, 0.25, 0.05)
-swings_length = st.sidebar.int_input("Swing Length (for BOS/CHoCH)", min_value=10, max_value=100, value=50)  # Like swingsLengthInput
-internal_length = st.sidebar.int_input("Internal Length (for smaller structures)", min_value=1, max_value=20, value=5)
-equal_hl_length = st.sidebar.int_input("Equal Highs/Lows Bars Confirmation", min_value=1, value=3)  # Like equalHighsLowsLengthInput
-equal_hl_threshold = st.sidebar.float_input("Equal Highs/Lows Threshold", min_value=0.0, max_value=0.5, value=0.1, step=0.01)
-fvg_threshold = st.sidebar.float_input("FVG Threshold", min_value=0.0001, value=0.0005)
-order_block_mitigation = st.sidebar.selectbox("Order Block Mitigation", ("Close", "High/Low"), index=1)  # Like orderBlockMitigationInput
+swings_length = st.sidebar.number_input("Swing Length (for BOS/CHoCH)", min_value=10, max_value=100, value=50)
+internal_length = st.sidebar.number_input("Internal Length (for smaller structures)", min_value=1, max_value=20, value=5)
+equal_hl_length = st.sidebar.number_input("Equal Highs/Lows Bars Confirmation", min_value=1, value=3)
+equal_hl_threshold = st.sidebar.number_input("Equal Highs/Lows Threshold", min_value=0.0, max_value=0.5, value=0.1, step=0.01)
+fvg_threshold = st.sidebar.number_input("FVG Threshold", min_value=0.0001, value=0.0005)
+order_block_mitigation = st.sidebar.selectbox("Order Block Mitigation", ("Close", "High/Low"), index=1)
 
 def send_telegram(message):
-    if "YOUR_CHAT_ID_HERE" in TELEGRAM_CHAT_ID:
-        return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
@@ -85,11 +82,46 @@ def start_of_bearish_leg(leg_series):
 def start_of_bullish_leg(leg_series):
     return leg_series.diff() == 1
 
+# Detect BOS/CHoCH for a dataframe (adapted LuxAlgo logic)
+def detect_structure(df, length, is_internal=False):
+    leg_series = leg(df, length)
+    new_pivot = start_of_new_leg(leg_series)
+    pivot_low = start_of_bullish_leg(leg_series)
+    pivot_high = start_of_bearish_leg(leg_series)
+    bias = "No Bias"
+    phase = "Waiting"
+    poi = None
+    choche = False
+    trend_bias = leg_series.cumsum()  # Approximate trend
+
+    if new_pivot.iloc[-1]:
+        if pivot_low.iloc[-1]:
+            bias = "Bullish"
+            phase = "Pullback"
+            poi = df['Open'].iloc[-2].item() if df['Close'].iloc[-2] < df['Open'].iloc[-2] else df['Low'].iloc[-2].item()
+            if trend_bias.iloc[-1] < 0:
+                choche = True
+        elif pivot_high.iloc[-1]:
+            bias = "Bearish"
+            phase = "Pullback"
+            poi = df['Open'].iloc[-2].item() if df['Close'].iloc[-2] > df['Open'].iloc[-2] else df['High'].iloc[-2].item()
+            if trend_bias.iloc[-1] > 0:
+                choche = True
+
+    # Volume spike for confirmation
+    volume_spike = df['Volume'].iloc[-1].item() > df['Volume'].rolling(5).mean().iloc[-1].item() * 1.5
+    if not volume_spike:
+        bias = "No Bias"
+
+    previous_bos = [bias] if bias != "No Bias" else []
+
+    return bias, phase, poi, choche, previous_bos
+
 # Main loop
 status_data = []
 for sym in symbols:
     current_price_num, price_str = get_current_price(sym)
-    h4 = get_tf_data(sym, "4h", "120d")  # Longer for previous BOS
+    h4 = get_tf_data(sym, "4h", "120d")
     m15 = get_tf_data(sym, "15m", "14d")
 
     if h4 is None or len(h4) < 50 or m15 is None or len(m15) < 50:
@@ -106,42 +138,6 @@ for sym in symbols:
             "Last Update": datetime.now().strftime("%H:%M:%S")
         })
         continue
-
-    # Detect BOS/CHoCH for a dataframe (adapted LuxAlgo logic)
-    def detect_structure(df, length, is_internal=False):
-        leg_series = leg(df, length)
-        new_pivot = start_of_new_leg(leg_series)
-        pivot_low = start_of_bullish_leg(leg_series)
-        pivot_high = start_of_bearish_leg(leg_series)
-        bias = "No Bias"
-        phase = "Waiting"
-        poi = None
-        choche = False
-        trend_bias = leg_series.cumsum()  # Approximate trend (cumulative legs)
-        
-        if new_pivot.iloc[-1]:
-            if pivot_low.iloc[-1]:
-                bias = "Bullish"
-                phase = "Pullback"
-                poi = df['Open'].iloc[-2] if df['Close'].iloc[-2] < df['Open'].iloc[-2] else df['Low'].iloc[-2]
-                if trend_bias.iloc[-1] < 0:
-                    choche = True  # CHoCH if against trend
-            elif pivot_high.iloc[-1]:
-                bias = "Bearish"
-                phase = "Pullback"
-                poi = df['Open'].iloc[-2] if df['Close'].iloc[-2] > df['Open'].iloc[-2] else df['High'].iloc[-2]
-                if trend_bias.iloc[-1] > 0:
-                    choche = True
-                
-        # Volume spike for confirmation
-        volume_spike = df['Volume'].iloc[-1] > df['Volume'].rolling(5).mean().iloc[-1] * 1.5
-        if not volume_spike:
-            bias = "No Bias"  # Invalidate if no volume
-
-        # Previous BOS (store up to 3)
-        previous_bos = [bias] if bias != "No Bias" else []
-
-        return bias, phase, poi, choche, previous_bos
 
     # 4H (swing)
     bias_4h, phase_4h, poi_4h, choche_4h, prev_bos_4h = detect_structure(h4, swings_length)
@@ -169,10 +165,10 @@ for sym in symbols:
         prev_high = m15['High'].iloc[-3].item()
         last_high = m15['High'].iloc[-1].item()
         prev_low = m15['Low'].iloc[-3].item()
-        
+
         gap = abs(last_high - prev_low)
         min_gap = fvg_threshold
-        
+
         if last_low > prev_high and gap > min_gap and (bias_15m in ["Bullish", "No Bias"] or phase_15m == "Pullback"):
             fvg_signal = "Bullish FVG"
         if last_high < prev_low and gap > min_gap and (bias_15m in ["Bearish", "No Bias"] or phase_15m == "Pullback"):
@@ -188,12 +184,12 @@ for sym in symbols:
     # Telegram alert with TF, entry/SL/TP (scaled for day trading)
     for tf, bias, phase, poi, dist_str, choche in [("4H", bias_4h, phase_4h, poi_4h, dist_str_4h, choche_4h), ("15m", bias_15m, phase_15m, poi_15m, dist_str_15m, choche_15m)]:
         if bias != "No Bias":
-            rr_scale = 3 if tf == "4H" else 1  # 1:3 for swing, 1:1 for day trade
+            rr_scale = 3 if tf == "4H" else 1
             entry = f"{current_price_num:.5f}"
             sl = f"{poi - 0.0005:.5f}" if bias == "Bullish" else f"{poi + 0.0005:.5f}"
             tp1 = f"{current_price_num + (current_price_num - float(sl)) * rr_scale:.5f}" if bias == "Bullish" else f"{current_price_num - (float(sl) - current_price_num) * rr_scale:.5f}"
             tp2 = f"{current_price_num + (current_price_num - float(sl)) * rr_scale * 2:.5f}" if bias == "Bullish" else f"{current_price_num - (float(sl) - current_price_num) * rr_scale * 2:.5f}"
-            
+
             tag = "CHoCH" if choche else "BOS"
             alert_text = f"""
 🚨 <b>{sym} {tf}</b> @ {price_str}
@@ -205,7 +201,7 @@ Signal: {fvg_signal or 'Confirmed'}
             send_telegram(alert_text)
 
     # Build row
-    status = f"{bias_4h} { 'CHoCH' if choche_4h else 'BOS' } – {phase_4h} | {order_block or ''} | {fvg_signal or ''}"
+    status = f"{bias_4h} {'CHoCH' if choche_4h else 'BOS'} – {phase_4h} | {order_block or ''} | {fvg_signal or ''}"
     status_data.append({
         "Symbol": sym,
         "Current Price": price_str,
@@ -235,4 +231,3 @@ st.caption("Red = Bearish | Blue accents = Brand | Mini charts + accurate order-
 
 time.sleep(refresh_rate)
 st.rerun()
-
